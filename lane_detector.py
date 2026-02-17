@@ -49,13 +49,13 @@ class SimpleLaneDetector:
 
     def __init__(
         self,
-        img_width: int = 128,
-        img_height: int = 128,
+        img_width: int = 160,
+        img_height: int = 90,
         roi_top_ratio: float = 0.4,       # Focus on the lower 60% of image
         edge_threshold: int = 50,         # Canny edge threshold
-        min_lane_width_px: int = 20,      # Minimum lane width
-        max_lane_width_px: int = 100,     # Maximum lane width
-        center_tolerance_px: int = 15,    # Tolerance for "in lane"
+        min_lane_width_px: int = 25,      # Minimum lane width
+        max_lane_width_px: int = 125,     # Maximum lane width
+        center_tolerance_px: int = 19,    # Tolerance for "in lane"
     ):
         self.img_width = img_width
         self.img_height = img_height
@@ -196,10 +196,10 @@ class SemanticLaneDetector:
 
     def __init__(
         self,
-        img_width: int = 128,
-        img_height: int = 128,
+        img_width: int = 160,
+        img_height: int = 90,
         lane_label: int = 1,              # Semantic label for lane
-        center_tolerance_px: int = 15,    # Tolerance for "in lane"
+        center_tolerance_px: int = 19,    # Tolerance for "in lane"
     ):
         self.img_width = img_width
         self.img_height = img_height
@@ -357,18 +357,18 @@ if __name__ == "__main__":
     print("Testing SimpleLaneDetector...")
 
     # Creating synthetic test image (road with lane markings)
-    test_img = np.zeros((128, 128, 3), dtype=np.uint8)
+    test_img = np.zeros((90, 160, 3), dtype=np.uint8)
 
     # Draw road (gray)
-    test_img[40:, :] = 60
+    test_img[36:, :] = 60
 
     # Draw lane markings (white)
-    test_img[40:, 30:35] = 255 # Left boundary
-    test_img[40:, 93:98] = 255 # Right boundary
-    test_img[40:, 61:66] = 200 # Center line
+    test_img[36:, 37:42] = 255 # Left boundary
+    test_img[36:, 116:121] = 255 # Right boundary
+    test_img[36:, 77:82] = 200 # Center line
 
     # Create detector
-    detector = SimpleLaneDetector(img_width=128, img_height=128)
+    detector = SimpleLaneDetector(img_width=160, img_height=90)
 
     # Test detection
     result = detector.detect(test_img)
@@ -387,10 +387,10 @@ if __name__ == "__main__":
     vis = visualize_lane_detection(test_img, result, show=False)
 
     # Test with offset vehicle (simulate steering right)
-    test_img_offset = np.zeros((128, 128, 3), dtype=np.uint8)
-    test_img_offset[40:, :] = 60
-    test_img_offset[40:, 40:45] = 255 # Left boundary (shifted)
-    test_img_offset[40:, 103:108] = 255 # Right boundary (shifted)
+    test_img_offset = np.zeros((90, 160, 3), dtype=np.uint8)
+    test_img_offset[36:, :] = 60
+    test_img_offset[36:, 50:55] = 255 # Left boundary (shifted)
+    test_img_offset[36:, 129:134] = 255 # Right boundary (shifted)
 
     result_offset = detector.detect(test_img_offset)
     print(f"\nOffset Vehicle Detection:")
@@ -398,3 +398,4 @@ if __name__ == "__main__":
     print(f"  Lateral Offset: {result_offset.lateral_offset:.3f}")
 
     print("\n Lane detector test complete!")
+

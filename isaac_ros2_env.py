@@ -13,8 +13,13 @@ Publishes to:
 This uses the vehicle controller's actual outputs rather than full odometry,
 maintaining thread safety while keeping data types simple.
 
+Camera: Intel RealSense D435i
+    RGB native: 1920x1080 (16:9)
+    Depth native: 1280x720 (16:9)
+    Downsampled to 160x90 preserving 16:9 aspect ratio.
 Author: Aaron
 Date: 02/12/26
+Updated: 02/17/26
 """
 
 import numpy as np
@@ -41,11 +46,10 @@ except ImportError:
 @dataclass
 class IsaacROS2Config:
     """Configuration for Isaac Sim ROS2 Environment"""
-    # ... (rest of config unchanged)
 
     # Image settings
-    img_width: int = 128
-    img_height: int = 128
+    img_width: int = 160
+    img_height: int = 90
 
     # ROS2 topic names
     camera_topic: str = "/camera/image_raw"
@@ -72,7 +76,7 @@ class IsaacROS2Env(gym.Env):
     Gymnasium environment for Isaac Sim via ROS2.
 
     Subscribes to vehicle controller outputs:
-    - Camera image (RGB)
+    - Camera image (RGB, 160x90)
     - Vehicle state (speed, steering from controller)
 
     Enforces Passive Visual Protocol by masking geometric information from agent observation.
