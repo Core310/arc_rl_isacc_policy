@@ -178,7 +178,7 @@ class WaypointTrackingWrapper(gym.Wrapper):
 
         # Dead-reckoning position estimate
         # (Isaac Sim does not provide ground-truth position in info dict)
-        positon = self._update_position_estimate(obs)
+        position = self._update_position_estimate(obs)
         yaw = self._estimated_yaw
 
         # Extract speed from observation

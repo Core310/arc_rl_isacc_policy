@@ -124,10 +124,10 @@ class FusionFeaturesExtractor(BaseFeaturesExtractor):
             (B, 268) fused feature vector, LayerNorm'd.
         """
         # Visual stream: CNN on camera image
-        visual_feats = self.cnn(observations["image"])
+        visual_feats = self.cnn(observation["image"])
 
         # Physics stream: raw telemetry passthrough
-        physics_feats = observations["vec"]
+        physics_feats = observation["vec"]
 
         # Concatenate and normalize
         fused = torch.cat([visual_feats, physics_feats], dim=1)

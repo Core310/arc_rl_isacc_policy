@@ -140,7 +140,7 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
 
         # Store hierarchical parameters before super().__init__
         self.num_waypoints = num_waypoints
-        self.waypoint_dum = num_waypoints * 2 # (x, y) per waypoint
+        self.waypoint_dim = num_waypoints * 2 # (x, y) per waypoint
         self.waypoint_horizon = waypoint_horizon
         self.repulsion_weight = repulsion_weight
         self.waypoint_loss_Weight = waypoint_loss_weight
@@ -150,7 +150,7 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
         self.curvature_gain = curvature_gain
         self.command_blend_factor = command_blend_factor
         self.steering_blend_factor = steering_blend_factor
-        self.progressive_curvature_exp = progressibe_curvature_exp
+        self.progressive_curvature_exp = progressive_curvature_exp
 
         # Head dimensions
         self.planning_hidden_dim = 128
@@ -228,7 +228,7 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
     def _build_hierarchical_heads(self) -> None:
         """Build the planning and control neural network heads."""
         if self.mlp_extractor is not None:
-            head_input_dim = self.mlp_extractor.lateral_dim_pi
+            head_input_dim = self.mlp_extractor.latent_dim_pi
         else:
             head_input_dim = self.lstm_output_dim
         # Planning Head: LSTM features -> waypoint deviations
@@ -308,10 +308,10 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
             angle = effective_curvature * self.curvature_gain * progressive_factor
 
             # Vehicle frame: X = lateral (+ right), Y = forward (+ ahead)
-            anchors[:, i, 0] = dist * torch.sin(angle) # Lateral
-            anchors[:, i, 1] = dist * torch.cos(angle) # Forward
+            anchor[:, i, 0] = dist * torch.sin(angle) # Lateral
+            anchor[:, i, 1] = dist * torch.cos(angle) # Forward
 
-        return anchors
+        return anchor
 
     def _compute_waypoints(self, latent_pi: torch.Tensor, obs_vec: torch.Tensor) -> torch.Tensor:
         """
@@ -375,7 +375,7 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
         latent_pi, lstm_states_pi = self._process_sequence(pi_features, lstm_states.pi, episode_starts, self.lstm_actor)
 
         if self.enable_critic_lstm:
-            lstm_vf, lstm_states_vf = self._process_sequence(vf_features, lstm_states.vf, episode_starts, self.lstm_critic)
+            latent_vf, lstm_states_vf = self._process_sequence(vf_features, lstm_states.vf, episode_starts, self.lstm_critic)
         else:
             latent_vf = vf_features
             lstm_states_vf = lstm_states.vf
