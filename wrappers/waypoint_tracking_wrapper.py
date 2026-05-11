@@ -112,11 +112,11 @@ class WaypointTrackingWrapper(gym.Wrapper):
          position source in Isaac Sim (unlike Unity which could provide ground-truth car_position).
     """
 
-    # Steps to backfill as unsafe when crash occurs (~0.5s at 50Hz)
-    SAFETY_BACKFILL_STEPS = 25
+    # Steps to backfill as unsafe when crash occurs (~0.5s at 20Hz)
+    SAFETY_BACKFILL_STEPS = 10
 
-    # Physics timestep (must match isaac_ros2_env.py)
-    DT = 0.02 # 50 Hz
+    # Physics timestep (must match ARCProEnvCfg)
+    DT = 0.05 # 20 Hz
 
     # Telemetry indices
     IDX_SPEED = 3
@@ -192,9 +192,12 @@ class WaypointTrackingWrapper(gym.Wrapper):
         yaw = self._estimated_yaw
 
         # Extract speed from observation
-        if isinstance(obs, dict) and "vec" in obs:
-            vec = obs["vec"]
-            speed = float(vec[self.env_id, self.IDX_SPEED] if vec.ndim > 1 else vec[self.IDX_SPEED])
+        if isinstance(obs, dict):
+            vec = obs.get("policy", obs.get("vec"))
+            if vec is not None:
+                speed = float(vec[self.env_id, self.IDX_SPEED] if vec.ndim > 1 else vec[self.IDX_SPEED])
+            else:
+                speed = 0.0
         else:
             speed = 0.0
 
@@ -249,10 +252,12 @@ class WaypointTrackingWrapper(gym.Wrapper):
             yaw    = heading angle (radians)
         """
 
-        if not isinstance(obs, dict) or "vec" not in obs:
+        if not isinstance(obs, dict):
             return self._estimated_pos.copy()
 
-        vec = obs["vec"]
+        vec = obs.get("policy", obs.get("vec"))
+        if vec is None:
+            return self._estimated_pos.copy()
         speed = float(vec[self.env_id, self.IDX_SPEED] if vec.ndim > 1 else vec[self.IDX_SPEED])
         yaw_rate = float(vec[self.env_id, self.IDX_YAW_RATE] if vec.ndim > 1 else vec[self.IDX_YAW_RATE])
 
