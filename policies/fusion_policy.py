@@ -34,7 +34,7 @@ class FusionFeaturesExtractor(BaseFeaturesExtractor):
         # We add an adaptive pooling layer at the start to ensure the CNN 
         # always sees a consistent resolution regardless of the input.
         self.cnn = nn.Sequential(
-            # Force HD input into a manageable internal representation
+            # Force HD input into a manageable internal representation (Stable Square)
             nn.AdaptiveAvgPool2d((128, 128)),
             nn.Conv2d(3, 32, kernel_size=8, stride=4),
             nn.ReLU(),
