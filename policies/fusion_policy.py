@@ -16,60 +16,46 @@ import torch
 import torch.nn as nn
 from gymnasium import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from torchvision.models import resnet18, ResNet18_Weights
 
 class FusionFeaturesExtractor(BaseFeaturesExtractor):
     """
-    Flexible High-Resolution Fusion Network.
-    Uses early downsampling to process HD images without exploding connection counts.
+    HD Fusion Network with ResNet-18 Backbone.
+    Uses ImageNet-v1 weights (unfrozen) for rapid feature convergence.
+    Handles uint8 images with on-GPU normalization.
     """
 
     def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
         # Pass the final output dim (256) to SB3
         super().__init__(observation_space, features_dim=features_dim)
 
-        # 1. Image Geometry
-        c, h, w = observation_space["image"].shape
+        # 1. Vision Stream: ResNet-18
+        # We use weights=ResNet18_Weights.IMAGENET1K_V1 for transfer learning
+        self.resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
         
-        # 2. Vision Stream (NatureCNN style with automatic dimensionality)
-        # We add an adaptive pooling layer at the start to ensure the CNN 
-        # always sees a consistent resolution regardless of the input.
-        self.cnn = nn.Sequential(
-            # Force HD input into a manageable internal representation (Stable Square)
-            nn.AdaptiveAvgPool2d((128, 128)),
-            nn.Conv2d(3, 32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
+        # Remove the final fully connected layer (identity passthrough)
+        # ResNet18 output dim is 512
+        self.resnet.fc = nn.Identity()
 
-        # 3. Compute CNN output dimension dynamically
-        with torch.no_grad():
-            sample = torch.as_tensor(observation_space["image"].sample()[None]).float()
-            # Note: SB3 handles normalization but we just need the shape here
-            n_flatten = self.cnn(sample).shape[1]
-
-        self.vision_linear = nn.Sequential(
-            nn.Linear(n_flatten, 256),
-            nn.ReLU()
-        )
-
-        # 4. Fusion Head
+        # 2. Physics Stream
         vec_dim = observation_space["vec"].shape[0]
+
+        # 3. Fusion Head
+        # ResNet-18 features (512) + Telemetry (vec_dim)
         self.fusion_head = nn.Sequential(
-            nn.Linear(256 + vec_dim, features_dim),
+            nn.Linear(512 + vec_dim, features_dim),
             nn.ReLU(),
             nn.LayerNorm(features_dim)
         )
 
     def forward(self, observation: dict) -> torch.Tensor:
-        # Extract visual features (B, 256)
-        visual_feats = self.cnn(observation["image"])
-        visual_feats = self.vision_linear(visual_feats)
+        # 1. Normalize uint8 images to [0, 1] on GPU
+        img = observation["image"].float() / 255.0
+        
+        # 2. Extract ResNet features (B, 512)
+        visual_feats = self.resnet(img)
 
-        # Fusion
+        # 3. Fusion (Vision + Telemetry)
         combined = torch.cat([visual_feats, observation["vec"]], dim=1)
 
         return self.fusion_head(combined)

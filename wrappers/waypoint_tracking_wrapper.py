@@ -116,7 +116,8 @@ class WaypointTrackingWrapper(gym.Wrapper):
     SAFETY_BACKFILL_STEPS = 10
 
     # Physics timestep (must match ARCProEnvCfg)
-    DT = 0.05 # 20 Hz
+    # Env DT = sim_dt (0.002) * decimation (10) = 0.02
+    DT = 0.02 # 50 Hz
 
     # Telemetry indices
     IDX_SPEED = 3
