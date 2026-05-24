@@ -68,7 +68,7 @@ class WaypointLoss:
         self._store = get_trajectory_store()
 
     def compute(self,
-                predictated_waypoints: torch.Tensor,
+                predicted_waypoints: torch.Tensor,
                 obs_vec: torch.Tensor,
                 env_id: int = 0,
                ) -> Tuple[torch.Tensor, Dict[str, float]]:
@@ -97,9 +97,8 @@ class WaypointLoss:
             "waypoint_loss/total": 0.0,
         }
 
-        # Get trajectory from store
-        trajectory = self._store.get_trajectory(env_id)
-        safety_mask = self._store.get_safety_mask(env_id)
+        # Get trajectory and safety mask atomically from store
+        trajectory, safety_mask = self._store.get_full_trajectory(env_id)
 
         has_trajectory = trajectory is not None and safety_mask is not None
 
@@ -228,24 +227,19 @@ class WaypointLoss:
     def _goal_directed_loss(self, predicted: torch.Tensor, obs_vec: torch.Tensor) -> torch.Tensor:
         """
         Soft loss encouraging waypoints to curve in the turn_bias direction.
-
-        If turn_bias > 0 (turn right), waypoints should have positive X.
-        If turn_bias < 0 (turn left), waypoints should have negative X.
-        If turn_bias = 0 (straight), waypoints should have X near 0.
-
-        This is a weak signal that helps training bootstrap before enough crash/safe trajectory is available.
+        Mapping (v3.0): turn_bias 1.0 (Left), -1.0 (Right).
+        Local Frame (v3.0): Lateral is index 0. Positive is Left.
         """
         turn_bias = obs_vec[:, 0] # (B,) turn command
 
-        # Average lateral position of predicted waypoints
+        # Average lateral position of predicted waypoints (Lateral is index 0)
         avg_lateral = predicted[:, :, 0].mean(dim=1) # (B,)
 
-        # Loss: penalize when lateral direction disagrees with turn_bias
-        # Using negative cosine similarity style:
-        # If both point in same direction -> low loss
-        # If they disagree -> high loss
-        alignment = avg_lateral * turn_bias # positive when aligned
-        goal_loss = F.relu(-alignment).mean() # penalty when misaligned
+        # Goal alignment: positive when both are same sign (both left or both right)
+        alignment = avg_lateral * turn_bias
+        
+        # Penalty when signs differ
+        goal_loss = F.relu(-alignment).mean()
 
         return goal_loss
 
@@ -253,26 +247,35 @@ class WaypointLoss:
     def _world_to_local(world_pos: np.ndarray, ref_pos:np.ndarray, ref_yaw: float,) -> np.ndarray:
         """
         Transform a world position to vehicle-local frame.
+        Remapped for Isaac Sim: X=Forward, Y=Lateral, Z=Up.
 
         Args:
             world_pos: (3,) world position [x, y, z].
             ref_pos: (3,) reference (vehicle) world position.
-            ref_yaw: Vehicle heading angle (radians)
+            ref_yaw: Vehicle heading angle (radians). 0.0 is along X+.
 
         Returns:
-            local: (2,) local position [x_lateral, y_lateral].
+            local: (2,) local position [lateral, forward].
         """
+        # dx, dy horizontal distance
         dx = world_pos[0] - ref_pos[0]
-        dz = world_pos[2] - ref_pos[2]
+        dy = world_pos[1] - ref_pos[1]
 
+        # In Isaac, yaw=0 is along X+.
+        # Standard rotation:
+        # local_forward (X) = dx*cos + dy*sin
+        # local_lateral (Y) = -dx*sin + dy*cos
         cos_yaw = np.cos(ref_yaw)
         sin_yaw = np.sin(ref_yaw)
 
         # Rotate into vehicle frame
-        local_x = dx * cos_yaw - dz * sin_yaw # Lateral
-        local_z = dx * sin_yaw + dz * cos_yaw # Forward
+        # Forward is X-axis in local frame
+        local_fwd = dx * cos_yaw + dy * sin_yaw
+        # Lateral is Y-axis in local frame (Positive = Left)
+        local_lat = -dx * sin_yaw + dy * cos_yaw
 
-        return np.array([local_x, local_z], dtype=np.float32)
+        # Return as [lateral, forward] to match HierarchicalPolicy output
+        return np.array([local_lat, local_fwd], dtype=np.float32)
 
     @staticmethod
     def _find_point_at_distance(positions: np.ndarray, valid_indices: np.ndarray, ref_idx: int, target_dist: float,) -> Optional[int]:
