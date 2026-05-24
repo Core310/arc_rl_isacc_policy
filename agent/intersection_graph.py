@@ -50,11 +50,11 @@ from typing import Dict, List, Optional, Tuple
 
 class TurnCommand:
     """Discrete navigation commands replacing continuous turn_bias."""
-    LEFT = -1
+    LEFT = 1
     STRAIGHT = 0
-    RIGHT = 1
+    RIGHT = -1
 
-    _NAMES = {-1: "LEFT", 0: "STRAIGHT", 1: "RIGHT"}
+    _NAMES = {1: "LEFT", 0: "STRAIGHT", -1: "RIGHT"}
 
     @classmethod
     def name(cls, value: int) -> str:

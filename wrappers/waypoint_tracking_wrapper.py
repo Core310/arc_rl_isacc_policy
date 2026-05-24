@@ -81,6 +81,15 @@ class TrajectoryStore:
         with self._data_lock:
             return self._episode_safety.get(env_id)
 
+    def get_full_trajectory(self, env_id: int) -> Tuple[Optional[Dict], Optional[np.ndarray]]:
+        """Atomic read of both trajectory and safety mask to prevent race conditions."""
+        with self._data_lock:
+            traj = self._trajectories.get(env_id)
+            mask = self._episode_safety.get(env_id)
+            if traj is not None and mask is not None:
+                return traj.copy(), mask.copy()
+            return None, None
+
     def clear(self, env_id: Optional[int] = None):
         """Clear stored data."""
         with self._data_lock:
@@ -107,9 +116,7 @@ class WaypointTrackingWrapper(gym.Wrapper):
         2. Actual trajectory via dead reckoning (for self-supervised learning)
         3. Safety flags with backfill for crash trajectories
 
-    Dead reckoning:
-         Uses speed and yaw_rate from the telemetry vector to integrate position over time. This is the ONLY
-         position source in Isaac Sim (unlike Unity which could provide ground-truth car_position).
+    Vectorized to handle multi-environment setups.
     """
 
     # Steps to backfill as unsafe when crash occurs (~0.5s at 20Hz)
@@ -122,50 +129,36 @@ class WaypointTrackingWrapper(gym.Wrapper):
     # Telemetry indices
     IDX_SPEED = 3
     IDX_YAW_RATE = 4
-    IDX_DS = 11
 
-    def __init__(self, env: gym.Env, env_id: int = 0):
+    def __init__(self, env: gym.Env):
         super().__init__(env)
-        self.env_id = env_id
-
-        # Trajectory buffers
-        self.position_history: list = []
-        self.yaw_history: list = []
-        self.speed_history: list = []
-        self.reward_history: list = []
-
-        # Safety tracking
-        self.safety_history: list = []
-
-        # Waypoint tracking
-        self.last_predicted_waypoints: Optional[np.ndarray] = None
-        self.waypoint_prediction_history: list = []
-
-        # Dead-reckoning state
-        self._estimated_pos = np.zeros(3, dtype=np.float32)
-        self._estimated_yaw = 0.0
-
-        # Episode tracking
-        self._step_count = 0
+        self.num_envs = getattr(env, "num_envs", 1)
+        
+        # Vectorized buffers
+        self.position_history = [[] for _ in range(self.num_envs)]
+        self.yaw_history = [[] for _ in range(self.num_envs)]
+        self.speed_history = [[] for _ in range(self.num_envs)]
+        self.safety_history = [[] for _ in range(self.num_envs)]
+        
+        # Dead-reckoning state (Vectorized)
+        self.device = getattr(env, "device", "cpu")
+        self._estimated_pos = np.zeros((self.num_envs, 3), dtype=np.float32)
+        self._estimated_yaw = np.zeros(self.num_envs, dtype=np.float32)
 
         # Global store
         self._store = get_trajectory_store()
 
     def reset(self, **kwargs) -> Tuple[Any, Dict]:
         """Reset environment and clear trajectory buffers."""
-        self.position_history = []
-        self.yaw_history = []
-        self.speed_history = []
-        self.reward_history = []
-        self.safety_history = []
-        self.waypoint_prediction_history = []
-        self.last_predicted_waypoints = None
+        for i in range(self.num_envs):
+            self.position_history[i] = []
+            self.yaw_history[i] = []
+            self.speed_history[i] = []
+            self.safety_history[i] = []
+            self._store.clear(i)
 
-        self._estimated_pos = np.zeros(3, dtype=np.float32)
-        self._estimated_yaw = 0.0
-        self._step_count = 0
-
-        self._store.clear(self.env_id)
+        self._estimated_pos.fill(0.0)
+        self._estimated_yaw.fill(0.0)
 
         ret = self.env.reset(**kwargs)
         if isinstance(ret, tuple) and len(ret) == 2:
@@ -174,163 +167,81 @@ class WaypointTrackingWrapper(gym.Wrapper):
 
     def step(self, action):
         """Step environment and record trajectory data."""
-        obs, reward, done, truncated, info = self.env.step(action)
-        self._step_count += 1
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        
+        # Convert to numpy for easier processing
+        reward_np = reward.cpu().numpy() if hasattr(reward, "cpu") else np.array(reward)
+        term_np = terminated.cpu().numpy() if hasattr(terminated, "cpu") else np.array(terminated)
+        trunc_np = truncated.cpu().numpy() if hasattr(truncated, "cpu") else np.array(truncated)
+        
+        # Update dead-reckoning position estimate (Vectorized)
+        self._update_position_estimate(obs)
 
-        # Handle batched tensors
-        def _to_scalar(v):
-            if hasattr(v, "ndim") and v.ndim > 0:
-                return float(v[self.env_id].item()) if hasattr(v, "item") else float(v[self.env_id])
-            return float(v)
-
-        reward_val = _to_scalar(reward)
-        done_val = bool(_to_scalar(done))
-        truncated_val = bool(_to_scalar(truncated))
-
-        # Dead-reckoning position estimate
-        # (Isaac Sim does not provide ground-truth position in info dict)
-        position = self._update_position_estimate(obs)
-        yaw = self._estimated_yaw
-
-        # Extract speed from observation
+        # Extract telemetry
         if isinstance(obs, dict):
             vec = obs.get("policy", obs.get("vec"))
-            if vec is not None:
-                speed = float(vec[self.env_id, self.IDX_SPEED] if vec.ndim > 1 else vec[self.IDX_SPEED])
-            else:
-                speed = 0.0
+            speed_np = vec[:, self.IDX_SPEED].cpu().numpy()
         else:
-            speed = 0.0
+            speed_np = np.zeros(self.num_envs)
 
-        # Store trajectory data
-        self.position_history.append(position.copy())
-        self.yaw_history.append(yaw)
-        self.speed_history.append(speed)
-        self.reward_history.append(reward_val)
+        # Store data for each environment
+        for i in range(self.num_envs):
+            self.position_history[i].append(self._estimated_pos[i].copy())
+            self.yaw_history[i].append(self._estimated_yaw[i])
+            self.speed_history[i].append(speed_np[i])
+            self.safety_history[i].append(1.0) # Initially safe
 
-        # Initially mark all steps as safe (1.0)
-        # Backfill will mark unsafe steps when episode ends
-        self.safety_history.append(1.0)
+            # Handle episode end
+            if term_np[i] or trunc_np[i]:
+                self._handle_episode_end(i, term_np[i], trunc_np[i], reward_np[i])
 
-        # Store waypoint prediction if available
-        if self.last_predicted_waypoints is not None:
-            self.waypoint_prediction_history.append(
-                {
-                    "step": self._step_count,
-                    "waypoints": self.last_predicted_waypoints.copy(),
-                    "position": position.copy(),
-                    "yaw": yaw,
-                }
-            )
+        return obs, reward, terminated, truncated, info
 
-        # Handle episode end. Apply safety backfill
-        if done_val or truncated_val:
-            self._handle_episode_end(done_val, truncated_val, reward_val)
-
-        # Add trajectory info to info dict (useful for debugging)
-        info["trajectory"] = {
-            "positions": np.array(self.position_history),
-            "yaws": np.array(self.yaw_history),
-            "speeds": np.array(self.speed_history),
-            "safety": np.array(self.safety_history),
-        }
-
-        if self.last_predicted_waypoints is not None:
-            info["predicted_waypoints"] = self.last_predicted_waypoints.copy()
-
-        return obs, reward, done, truncated, info
-
-    def _update_position_estimate(self, obs) -> np.ndarray:
-        """
-        Dead-reckoning position update using speed and yaw_rate.
-
-        Integrates velocity over the physics timestep to estimate position.
-        Uses speed * dt for distance (NOT vec[11] which is cumulative total distance in Isaac, not a per-step deltat like Unity's ds).
-
-        Coordinate frame:
-            pos[0] = X (lateral, positive = right)
-            pos[2] = Z (forwardm positive = ahead)
-            yaw    = heading angle (radians)
-        """
-
-        if not isinstance(obs, dict):
-            return self._estimated_pos.copy()
+    def _update_position_estimate(self, obs):
+        """Dead-reckoning position update (Vectorized)."""
+        if not isinstance(obs, dict): return
 
         vec = obs.get("policy", obs.get("vec"))
-        if vec is None:
-            return self._estimated_pos.copy()
-        speed = float(vec[self.env_id, self.IDX_SPEED] if vec.ndim > 1 else vec[self.IDX_SPEED])
-        yaw_rate = float(vec[self.env_id, self.IDX_YAW_RATE] if vec.ndim > 1 else vec[self.IDX_YAW_RATE])
+        if vec is None: return
+        
+        speed = vec[:, self.IDX_SPEED].cpu().numpy()
+        yaw_rate = vec[:, self.IDX_YAW_RATE].cpu().numpy()
 
         # Update yaw
         self._estimated_yaw += yaw_rate * self.DT
+        self._estimated_yaw = (self._estimated_yaw + np.pi) % (2 * np.pi) - np.pi
 
-        # Normalize to [-pi, pi]
-        while self._estimated_yaw > np.pi:
-            self._estimated_yaw -= 2 * np.pi
-        while self._estimated_yaw < -np.pi:
-            self._estimated_yaw += 2 * np.pi
-
-        # Update position using speed * dt
+        # Update position
+        # Isaac Sim: X = Forward, Y = Lateral, Z = Up
+        # Standard navigation: yaw=0 points along X+
         ds = speed * self.DT
-        if abs(ds) > 0.0001:
-            self._estimated_pos[0] += ds * np.sin(self._estimated_yaw) # X
-            self._estimated_pos[2] += ds * np.cos(self._estimated_yaw) # Z
+        self._estimated_pos[:, 0] += ds * np.cos(self._estimated_yaw) # Forward (X)
+        self._estimated_pos[:, 1] += ds * np.sin(self._estimated_yaw) # Lateral (Y)
+        # self._estimated_pos[:, 2] remains 0.0 (height)
 
-        return self._estimated_pos.copy()
-
-    def _handle_episode_end(self, done: bool, truncated: bool, final_reward: float):
-        """
-        Handle episode end, apply safety backfill if crash occured.
-
-        Safety logic:
-        * done=True, truncated=False, reward < 0: CRASH (backfill unsafe)
-        * done=True, truncated=False, reward > 0: SUCCESS (all safe)
-        * truncated=True: TIMEOUT (all safe, just ran out of time)
-        """
+    def _handle_episode_end(self, env_id: int, done: bool, truncated: bool, final_reward: float):
+        """Handle episode end and safety backfill for a specific environment."""
         is_crash = done and not truncated and final_reward < 0
 
         if is_crash:
-            num_steps = len(self.safety_history)
+            num_steps = len(self.safety_history[env_id])
             backfill_start = max(0, num_steps - self.SAFETY_BACKFILL_STEPS)
+            for j in range(backfill_start, num_steps):
+                self.safety_history[env_id][j] = 0.0
 
-            for i in range(backfill_start, num_steps):
-                self.safety_history[i] = 0.0
-
-        # Store in global trajectory store for training loop access
+        # Store in global store
         trajectory_data = {
-            "positions": np.array(self.position_history),
-            "yaws": np.array(self.yaw_history),
-            "speeds": np.array(self.speed_history),
+            "positions": np.array(self.position_history[env_id]),
+            "yaws": np.array(self.yaw_history[env_id]),
+            "speeds": np.array(self.speed_history[env_id]),
         }
-        safety_mask = np.array(self.safety_history)
+        safety_mask = np.array(self.safety_history[env_id])
+        self._store.store_trajectory(env_id, trajectory_data, safety_mask)
 
-        self._store.store_trajectory(self.env_id, trajectory_data, safety_mask)
-
-    def set_predicted_waypoints(self, waypoints: np.ndarray):
-        """Called by callback/policy to set the current predicted waypoints."""
-        self.last_predicted_waypoints = waypoints.copy()
-
-    def get_waypoint_history(self) -> list:
-        """Get history of waypoint predictions for analysis."""
-        return self.waypoint_prediction_history.copy()
-
-    def get_current_trajectory_for_loss(self) -> Optional[Dict]:
-        """
-        Get trajectory data fromatted for WaypointLoss computation.
-
-        Return dict with:
-        * positions: (N, 3) array of dead-reckoned world positions
-        * yaws: (N,) array of yaw angles
-        * safety: (N,) array of safety flags (1.0=safe, 0.0=unsafe)
-        * current_idx: int, index of the most recent step
-        """
-        if len(self.position_history) < 2:
-            return None
-
-        return {
-            "positions": np.array(self.position_history),
-            "yaws": np.array(self.yaw_history),
-            "safety": np.array(self.safety_history),
-            "current_idx": len(self.position_history) - 1,
-        }
+        # Reset local buffers for next episode
+        self.position_history[env_id] = []
+        self.yaw_history[env_id] = []
+        self.speed_history[env_id] = []
+        self.safety_history[env_id] = []
+        self._estimated_pos[env_id].fill(0.0)
+        self._estimated_yaw[env_id] = 0.0

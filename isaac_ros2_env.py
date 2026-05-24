@@ -237,7 +237,7 @@ class IsaacROS2Env(gym.Env):
 
         Args:
             bias: Continuous turn command [-1, 1].
-                -1 = hard left, 0 = straight, 1 = hard right.
+                1 = hard left, 0 = straight, -1 = hard right.
         """
         self.turn_bias = float(np.clip(bias, -1.0, 1.0))
 

@@ -110,7 +110,7 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
         lstm_kwargs: Optional[Dict[str, Any]] = None,
         # Hierarchical planning parameters
         num_waypoints: int = 5,
-        waypoint_horizon: float = 2.5,
+        waypoint_horizon: float = 10.0,
         repulsion_weight: float = 2.0,
         waypoint_loss_weight: float = 0.15,
         # Kinematic anchor parameters
@@ -263,9 +263,11 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
             head_input_dim = self.mlp_extractor.latent_dim_pi
         else:
             head_input_dim = self.lstm_output_dim
-        # Planning Head: LSTM features -> waypoint deviations
+            
+        # Quantum Fix: Planning Head needs to see the navigation intent (turn_token) 
+        # directly to stay aligned with the goal during high-speed maneuvers.
         self.planning_head = nn.Sequential(
-            nn.Linear(head_input_dim, self.planning_hidden_dim),
+            nn.Linear(head_input_dim + 1, self.planning_hidden_dim),
             nn.ReLU(),
             nn.Linear(self.planning_hidden_dim, self.planning_hidden_dim // 2),
             nn.ReLU(),
@@ -299,25 +301,17 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
     def _compute_kinematic_anchors(self, obs_vec: torch.Tensor) -> torch.Tensor:
         """
         Compute curved anchor points from turn command and current steering.
-
-        This creates an inductive bias toward continuing the current maneuver while respecting
-        the high-level navigation intent from the Worker's turn_token.
-
-        Args:
-            obs_vec: (batch_size, 12) telemetry vector.
-
-        Returns:
-            anchors: (batch_size, num_waypoints, 2) in vehicle frame [X=lateral, Y=forward].
+        Remapped for Isaac Sim: X=Forward, Y=Lateral, Z=Up.
+        Positive Steering/Lateral = LEFT.
         """
         batch_size = obs_vec.shape[0]
         device = obs_vec.device
 
         # Extract relevant signals
-        turn_token = obs_vec[:, self.IDX_TURN_TOKEN] # {-1, 0, 1} from Worker
+        turn_token = obs_vec[:, self.IDX_TURN_TOKEN] # {1.0=Left, 0.0=Straight, -1.0=Right}
         last_steer = obs_vec[:, self.IDX_LAST_STEER] # [-1, 1] current steering
 
-        # Adaptive blending: strong command -> trust navigation intent,
-        #                    weak command -> trust current steering for smooth driving
+        # Adaptive blending: strong command -> trust navigation intent
         command_strength = torch.abs(turn_token)
         adaptive_command_weight = self.command_blend_factor + 0.3 * command_strength
         adaptive_steer_weight = 1.0 - adaptive_command_weight
@@ -339,24 +333,18 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
             progressive_factor = (i + 1) ** self.progressive_curvature_exp
             angle = effective_curvature * self.curvature_gain * progressive_factor
 
-            # Vehicle frame: X = lateral (+ right), Y = forward (+ ahead)
-            anchor[:, i, 0] = dist * torch.sin(angle) # Lateral
-            anchor[:, i, 1] = dist * torch.cos(angle) # Forward
+            # Local Frame: X=Forward, Y=Lateral (Positive=Left)
+            anchor[:, i, 0] = dist * torch.sin(angle) # Lateral (Y)
+            anchor[:, i, 1] = dist * torch.cos(angle) # Forward (X)
 
         return anchor
 
     def _compute_waypoints(self, latent_pi: torch.Tensor, obs_vec: torch.Tensor) -> torch.Tensor:
         """
         Compute final waypoints as anchors + learned deviations.
-
-        Args:
-            latent_pi: (batch_size, latent_dim) LSTM output.
-            obs_vec: (batch_size, 12) telemetry vector.
-
-        Returns:
-            waypoints: (batch_size, num_waypoints, 2) positions in meters.
         """
         batch_size = latent_pi.shape[0]
+        turn_token = obs_vec[:, self.IDX_TURN_TOKEN].unsqueeze(1)
 
         # Get anchors (kinematic or static)
         if self.use_kinematic_anchors:
@@ -364,14 +352,15 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
         else:
             anchors = self.static_anchors.expand(batch_size, -1, -1).clone()
 
-        self.last_anchors = anchors # Save for visualization / debugging
+        self.last_anchors = anchors 
 
-        # Predict deviations from anchors
-        deviations = self.planning_head(latent_pi).reshape(
+        # Quantum Fix: Inject turn_token into planning head
+        planning_input = torch.cat([latent_pi, turn_token], dim=1)
+        deviations = self.planning_head(planning_input).reshape(
             -1, self.num_waypoints, 2
         )
 
-        # Constrain deviations (reduced since anchors handle the major curve)
+        # Constrain deviations
         deviations = torch.tanh(deviations) * self.max_deviation_meters
 
         # Final waypoints = anchors + learned corrections
