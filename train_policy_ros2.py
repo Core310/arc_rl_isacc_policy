@@ -269,10 +269,9 @@ def main():
     )
     print(f"  Worker mode: {args.worker_mode}")
 
-    # Environment
+    # Environment. Use IsaacDirectConfig's 224x224 default to match ResNet-18's
+    # pretrained ImageNet input and the inference path (see v2 §9 item 11).
     env_config = IsaacDirectConfig(
-        img_width=160,
-        img_height=90,
         episode_timeout=args.episode_timeout,
     )
 

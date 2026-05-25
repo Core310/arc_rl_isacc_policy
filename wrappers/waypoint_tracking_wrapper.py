@@ -112,11 +112,12 @@ class WaypointTrackingWrapper(gym.Wrapper):
          position source in Isaac Sim (unlike Unity which could provide ground-truth car_position).
     """
 
-    # Steps to backfill as unsafe when crash occurs (~0.5s at 50Hz)
-    SAFETY_BACKFILL_STEPS = 25
+    # Steps to backfill as unsafe when crash occurs (~0.5s at 20 Hz control)
+    SAFETY_BACKFILL_STEPS = 10
 
-    # Physics timestep (must match isaac_ros2_env.py)
-    DT = 0.02 # 50 Hz
+    # Control-loop dt (20 Hz). Was 0.02 / 50 Hz; the control loop runs at 20 Hz,
+    # so dead-reckoning was off by 2.5x. Fix per v2 §9 item 9.
+    DT = 0.05 # 20 Hz
 
     # Telemetry indices
     IDX_SPEED = 3

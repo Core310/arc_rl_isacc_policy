@@ -53,7 +53,7 @@ def run_inference(args):
         control_topic=args.control_topic,
         episode_timeout=args.episode_timeout,
     )
-    env = IsaacRos2Env(config=config)
+    env = IsaacROS2Env(config=config)
 
     # Load model
     print(f"Loading model: {args.model}")
@@ -81,7 +81,7 @@ def run_inference(args):
     # LSTM dimensions
     lstm_hidden_size = model.policy.lstm_hidden_size
     n_lstm_layers = model.policy.n_lstm_layers
-    signle_hidden_shape = (n_lstm_layers, 1, lstm_hidden_size)
+    single_hidden_shape = (n_lstm_layers, 1, lstm_hidden_size)
 
     # Inference loop
     episode = 0
@@ -99,7 +99,7 @@ def run_inference(args):
             lstm_states = (
                 (
                     np.zeros(single_hidden_shape, dtype=np.float32),
-                    np.zeros(single_hidden_shape, dtype=float32),
+                    np.zeros(single_hidden_shape, dtype=np.float32),
                 ),
                 (
                     np.zeros(single_hidden_shape, dtype=np.float32),
