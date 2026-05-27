@@ -33,6 +33,10 @@ class FusionFeaturesExtractor(BaseFeaturesExtractor):
         # We use weights=ResNet18_Weights.IMAGENET1K_V1 for transfer learning
         self.resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
         
+        # Mastery Fix: Unfreeze parameters for high-precision visual fine-tuning
+        for param in self.resnet.parameters():
+            param.requires_grad = True
+            
         # Remove the final fully connected layer (identity passthrough)
         # ResNet18 output dim is 512
         self.resnet.fc = nn.Identity()
