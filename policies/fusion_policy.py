@@ -33,9 +33,13 @@ class FusionFeaturesExtractor(BaseFeaturesExtractor):
         # We use weights=ResNet18_Weights.IMAGENET1K_V1 for transfer learning
         self.resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
         
-        # Mastery Fix: Unfreeze parameters for high-precision visual fine-tuning
-        for param in self.resnet.parameters():
-            param.requires_grad = True
+        # Mastery Fix: Partial-Brain unfreeze (Only Layer 4 + Pooling/FC)
+        # This provides track-specific precision while fitting in 12GB VRAM.
+        for name, param in self.resnet.named_parameters():
+            if "layer4" in name or "fc" in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
             
         # Remove the final fully connected layer (identity passthrough)
         # ResNet18 output dim is 512
