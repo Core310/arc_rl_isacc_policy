@@ -333,9 +333,9 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
             progressive_factor = (i + 1) ** self.progressive_curvature_exp
             angle = effective_curvature * self.curvature_gain * progressive_factor
 
-            # Local Frame: X=Forward, Y=Lateral (Positive=Left)
-            anchor[:, i, 0] = dist * torch.sin(angle) # Lateral (Y)
-            anchor[:, i, 1] = dist * torch.cos(angle) # Forward (X)
+            # Reverted to Original hierarchy mapping
+            anchor[:, i, 0] =   dist * torch.sin(angle) # Lateral (Y)
+            anchor[:, i, 1] =   dist * torch.cos(angle) # Forward (X)
 
         return anchor
 
