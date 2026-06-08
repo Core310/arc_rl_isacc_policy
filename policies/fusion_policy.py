@@ -68,13 +68,15 @@ class FusionFeaturesExtractor(BaseFeaturesExtractor):
                     nn.init.constant_(m.bias, 0)
 
     def forward(self, observation: dict) -> torch.Tensor:
-        # 1. Normalize uint8 images to ImageNet standard on GPU
-        # Check if already normalized [0, 1]. If uint8 [0, 255], scale it.
+        # 1. ImageNet Normalization (On GPU)
         img = observation["image"].float()
+        
+        # Mastery Fix: The environment already normalizes to [0, 1]. 
+        # We only apply ImageNet mean/std if the image is raw uint8 [0, 255].
+        # If it's already [0, 1], we pass it raw to the ResNet to avoid 'Black Road' syndrome.
         if img.max() > 1.0:
             img = img / 255.0
-        
-        img = (img - self.mean) / self.std
+            img = (img - self.mean) / self.std
         
         # 2. Extract ResNet features (B, 512)
         visual_feats = self.resnet(img)

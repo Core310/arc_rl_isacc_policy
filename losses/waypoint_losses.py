@@ -42,11 +42,11 @@ class WaypointLoss:
     def __init__(
         self,
         num_waypoints: int = 5,
-        waypoint_spacing: float = 0.5,
+        waypoint_spacing: float = 0.40,
         imitation_weight: float = 1.0,
         repulsion_weight: float = 2.0,
         goal_weight: float = 0.3,
-        repulsion_margin: float = 1.0,
+        repulsion_margin: float = 0.12,
     ):
         """
         Args:
