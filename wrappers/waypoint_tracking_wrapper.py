@@ -167,6 +167,14 @@ class WaypointTrackingWrapper(gym.Wrapper):
 
     def step(self, action):
         """Step environment and record trajectory data."""
+        # Force zero action until robot has settled on the ground
+        # Chassis Z < 0.10m means wheels are in contact with road
+        if hasattr(self.env, "unwrapped") and hasattr(self.env.unwrapped, "scene"):
+            root_pos = self.env.unwrapped.scene["robot"].data.root_pos_w
+            # Mask environments that are still in the air or very early in the episode
+            is_airborne = (root_pos[:, 2] > 0.10) | (self.env.unwrapped.episode_length_buf < 5)
+            action[is_airborne] = 0.0
+
         obs, reward, terminated, truncated, info = self.env.step(action)
         
         # Convert to numpy for easier processing
